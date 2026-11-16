@@ -493,17 +493,14 @@ test('RELAY_FREEBUFF_CONTEXT=0 writes no AGENTS.md and no CLAUDE_CONTEXT.md', ()
   assert.ok(!fs.existsSync(path.join(d, '.claude-relay', 'CLAUDE_CONTEXT.md')), 'no context file');
 });
 
-test('home directory is skipped (RELAY_HOME_OVERRIDE)', () => {
+test('home directory: no AGENTS.md pointer, but context + state still work (RELAY_HOME_OVERRIDE)', () => {
   const d = mkDir('fakehome');
   const r = runHook('stop', { cwd: d, transcript_path: ctxTranscript }, { RELAY_HOME_OVERRIDE: d });
   assert.strictEqual(r.status, 0, r.stderr);
   assert.ok(!fs.existsSync(path.join(d, 'AGENTS.md')), 'no AGENTS.md in home');
-  assert.ok(!fs.existsSync(path.join(d, '.claude-relay', 'CLAUDE_CONTEXT.md')), 'no context in home');
-  assert.ok(!fs.existsSync(path.join(d, '.claude-relay')), 'no relay state written in home');
+  assert.ok(fs.existsSync(path.join(d, '.claude-relay', 'CLAUDE_CONTEXT.md')), 'context still written in home');
   const p = runHook('prompt', { cwd: d }, { RELAY_HOME_OVERRIDE: d });
   assert.strictEqual(p.status, 0, p.stderr);
-  assert.strictEqual(p.stdout, '');
-  assert.ok(!fs.existsSync(path.join(d, '.claude-relay')), 'prompt does not write in home');
 });
 
 test('stop writes CLAUDE_CONTEXT.md with task, files, todos and recent turns', () => {
