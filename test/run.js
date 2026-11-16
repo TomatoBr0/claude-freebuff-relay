@@ -51,6 +51,8 @@ const BIN = path.join(ROOT, 'bin', 'claude-relay.js');
 process.env.RELAY_FREEBUFF_HOME = fbHome;
 delete process.env.RELAY_AUTO_IMPORT;
 delete process.env.RELAY_FIRST_LOOKBACK_HOURS;
+delete process.env.RELAY_FREEBUFF_CONTEXT;
+delete process.env.RELAY_HOME_OVERRIDE;
 
 console.log('parseResetTime');
 
@@ -409,6 +411,172 @@ test('import with no flags prints the newest chat in full and records it', () =>
   const state = JSON.parse(fs.readFileSync(path.join(listProj, '.claude-relay', 'state.json'), 'utf8'));
   assert.ok(state.importedChats['2099-04-01T00-00-00.000Z']);
   assert.ok(state.lastSyncedAt);
+});
+
+console.log('freebuff context (AGENTS.md pointer + CLAUDE_CONTEXT.md)');
+
+const BLOCK_START_TXT = '<!-- claude-relay:start -->';
+const ctxRoot = path.join(tmpRoot, 'ctx');
+fs.mkdirSync(ctxRoot, { recursive: true });
+const mkDir = (name) => {
+  const d = path.join(ctxRoot, name);
+  fs.mkdirSync(d, { recursive: true });
+  return d;
+};
+const ctxTranscript = path.join(ctxRoot, 'ctx-transcript.jsonl');
+fs.writeFileSync(
+  ctxTranscript,
+  [
+    JSON.stringify({ type: 'user', message: { role: 'user', content: 'Refactor the parser' } }),
+    JSON.stringify({
+      type: 'assistant',
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'Working on the parser now.' },
+          { type: 'tool_use', name: 'Edit', input: { file_path: 'src/parser.js', old_string: 'a', new_string: 'b' } },
+          {
+            type: 'tool_use',
+            name: 'TodoWrite',
+            input: { todos: [{ content: 'Write parser tests', status: 'pending' }] },
+          },
+        ],
+      },
+    }),
+  ].join('\n')
+);
+
+test('generated AGENTS.md mirrors CLAUDE.md and is git-excluded in a git repo', () => {
+  const repo = mkDir('gen repo');
+  const g = spawnSync('git', ['init', '-q'], { cwd: repo });
+  assert.strictEqual(g.status, 0, 'git init failed');
+  fs.writeFileSync(path.join(repo, 'CLAUDE.md'), '# Project rules\n\nUse tabs.\n');
+  const r = runHook('stop', { cwd: repo, session_id: 'g1' }, {});
+  assert.strictEqual(r.status, 0, r.stderr);
+  const agents = fs.readFileSync(path.join(repo, 'AGENTS.md'), 'utf8');
+  assert.strictEqual(agents.split(/\r?\n/)[0], core.GEN_MARK);
+  assert.ok(agents.includes('Project instructions (mirrored from CLAUDE.md):'));
+  assert.ok(agents.includes('# Project rules') && agents.includes('Use tabs.'));
+  assert.strictEqual(agents.split(BLOCK_START_TXT).length - 1, 1);
+  const ex = fs.readFileSync(path.join(repo, '.git', 'info', 'exclude'), 'utf8').split(/\r?\n/);
+  assert.ok(ex.includes('/AGENTS.md'), 'AGENTS.md excluded');
+  assert.ok(ex.includes('/.claude-relay/'), '.claude-relay excluded');
+  const st = spawnSync('git', ['status', '--short'], { cwd: repo, encoding: 'utf8' }).stdout;
+  assert.ok(!st.includes('AGENTS.md'), st);
+  const rep = core.statusReport(repo);
+  assert.ok(rep.includes('installed in AGENTS.md'), rep);
+  // Second in-process run takes the fast path and reports no change.
+  const again = core.ensureFreebuffPointer(repo);
+  assert.strictEqual(again.changed, false);
+});
+
+test('user AGENTS.md gets the marker block exactly once; rest untouched; never overwritten', () => {
+  const d = mkDir('user agents');
+  const original = '# My agent notes\n\nKeep tests green.\n';
+  fs.writeFileSync(path.join(d, 'AGENTS.md'), original);
+  fs.writeFileSync(path.join(d, 'CLAUDE.md'), 'SHOULD NOT APPEAR\n');
+  assert.strictEqual(runHook('stop', { cwd: d }, {}).status, 0);
+  assert.strictEqual(runHook('stop', { cwd: d }, {}).status, 0);
+  const after = fs.readFileSync(path.join(d, 'AGENTS.md'), 'utf8');
+  assert.strictEqual(after, original + '\n' + core.POINTER_BLOCK + '\n');
+  assert.strictEqual(after.split(BLOCK_START_TXT).length - 1, 1);
+  assert.ok(!after.includes(core.GEN_MARK));
+  assert.ok(!after.includes('SHOULD NOT APPEAR'));
+});
+
+test('RELAY_FREEBUFF_CONTEXT=0 writes no AGENTS.md and no CLAUDE_CONTEXT.md', () => {
+  const d = mkDir('disabled');
+  fs.writeFileSync(path.join(d, 'CLAUDE.md'), 'x\n');
+  const r = runHook('stop', { cwd: d, session_id: 'x', transcript_path: ctxTranscript }, { RELAY_FREEBUFF_CONTEXT: '0' });
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.ok(!fs.existsSync(path.join(d, 'AGENTS.md')), 'no AGENTS.md');
+  assert.ok(!fs.existsSync(path.join(d, '.claude-relay', 'CLAUDE_CONTEXT.md')), 'no context file');
+});
+
+test('home directory is skipped (RELAY_HOME_OVERRIDE)', () => {
+  const d = mkDir('fakehome');
+  const r = runHook('stop', { cwd: d, transcript_path: ctxTranscript }, { RELAY_HOME_OVERRIDE: d });
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.ok(!fs.existsSync(path.join(d, 'AGENTS.md')), 'no AGENTS.md in home');
+  assert.ok(!fs.existsSync(path.join(d, '.claude-relay', 'CLAUDE_CONTEXT.md')), 'no context in home');
+  assert.ok(!fs.existsSync(path.join(d, '.claude-relay')), 'no relay state written in home');
+  const p = runHook('prompt', { cwd: d }, { RELAY_HOME_OVERRIDE: d });
+  assert.strictEqual(p.status, 0, p.stderr);
+  assert.strictEqual(p.stdout, '');
+  assert.ok(!fs.existsSync(path.join(d, '.claude-relay')), 'prompt does not write in home');
+});
+
+test('stop writes CLAUDE_CONTEXT.md with task, files, todos and recent turns', () => {
+  const d = mkDir('ctx basic');
+  const r = runHook('stop', { cwd: d, session_id: 'sess-ctx', transcript_path: ctxTranscript }, {});
+  assert.strictEqual(r.status, 0, r.stderr);
+  const c = fs.readFileSync(path.join(d, '.claude-relay', 'CLAUDE_CONTEXT.md'), 'utf8');
+  assert.ok(c.includes('Latest Claude Code context for this project (auto-updated'));
+  assert.ok(c.includes('session sess-ctx'));
+  assert.ok(c.includes('Refactor the parser'));
+  assert.ok(c.includes('src/parser.js'));
+  assert.ok(c.includes('- [ ] Write parser tests'));
+  assert.ok(c.includes('Working on the parser now.'));
+  const state = JSON.parse(fs.readFileSync(path.join(d, '.claude-relay', 'state.json'), 'utf8'));
+  assert.strictEqual(state.contextFrom.path, ctxTranscript);
+  assert.strictEqual(state.mode, 'claude');
+});
+
+test('stop skips context regeneration when the transcript is unchanged', () => {
+  const d = mkDir('ctx skip');
+  assert.strictEqual(runHook('stop', { cwd: d, transcript_path: ctxTranscript }, {}).status, 0);
+  const s1 = core.readState(d);
+  assert.strictEqual(runHook('stop', { cwd: d, transcript_path: ctxTranscript }, {}).status, 0);
+  const s2 = core.readState(d);
+  assert.strictEqual(s2.contextUpdatedAt, s1.contextUpdatedAt, 'not regenerated');
+  assert.strictEqual(core.refreshClaudeContext(d, { transcript_path: ctxTranscript }).skipped, 'unchanged');
+});
+
+test('3MB transcript: original task (head) and recent turn (tail) both present, refresh under 1s', () => {
+  const big = path.join(ctxRoot, 'big-transcript.jsonl');
+  const fd = fs.openSync(big, 'w');
+  const write = (s) => fs.writeSync(fd, s + '\n');
+  write(JSON.stringify({ type: 'user', message: { role: 'user', content: 'ORIGINAL TASK MARKER: build the relay' } }));
+  const filler = 'x'.repeat(380);
+  let bytes = 0;
+  let i = 0;
+  while (bytes < 3.2 * 1024 * 1024) {
+    const line = JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: `filler ${i} ${filler}` }] } });
+    fs.writeSync(fd, line + '\n');
+    bytes += line.length + 1;
+    i++;
+  }
+  write(JSON.stringify({ type: 'user', message: { role: 'user', content: 'RECENT TURN MARKER: check the tail' } }));
+  write(
+    JSON.stringify({
+      type: 'assistant',
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'LATEST REPLY MARKER' },
+          { type: 'tool_use', name: 'Edit', input: { file_path: 'src/recent.js', old_string: 'a', new_string: 'b' } },
+        ],
+      },
+    })
+  );
+  fs.closeSync(fd);
+  const size = fs.statSync(big).size;
+  assert.ok(size > 3 * 1024 * 1024, `size ${size}`);
+  const d = mkDir('big proj');
+  const t0 = Date.now();
+  const res = core.refreshClaudeContext(d, { transcript_path: big, session_id: 'big' });
+  const ms = Date.now() - t0;
+  assert.ok(res.written, JSON.stringify(res));
+  assert.strictEqual(res.windowed, true);
+  const c = fs.readFileSync(path.join(d, '.claude-relay', 'CLAUDE_CONTEXT.md'), 'utf8');
+  assert.ok(c.includes('ORIGINAL TASK MARKER'), 'head read');
+  assert.ok(c.includes('RECENT TURN MARKER'), 'tail read');
+  assert.ok(c.includes('LATEST REPLY MARKER'));
+  assert.ok(c.includes('src/recent.js'));
+  assert.ok(ms < 1000, `refresh took ${ms} ms`);
+  const h = core.buildHandoff(d, big, new Date());
+  assert.ok(h.includes('ORIGINAL TASK MARKER') && h.includes('RECENT TURN MARKER'), 'handoff uses same windows');
+  console.log(`       (3MB transcript: ${size} bytes, context refresh ${ms} ms)`);
 });
 
 // Cleanup

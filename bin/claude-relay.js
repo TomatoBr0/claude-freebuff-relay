@@ -5,7 +5,7 @@
 const path = require('path');
 const core = require('../lib/core');
 
-const USAGE = `claude-relay - hand off between Claude Code and Freebuff when a Claude limit hits
+const USAGE = `claude-relay - share context between Claude Code and Freebuff
 
 Usage:
   claude-relay handoff [--cwd dir] [--transcript path] [--no-launch]
@@ -18,7 +18,7 @@ Usage:
       Pull in Freebuff sessions for this project, full history. Default: the
       newest chat. --list only lists matching chats and changes nothing.
   claude-relay status [--cwd dir]
-      Print the relay state for the project.
+      Print the relay state, Freebuff pointer status and context file age.
   claude-relay watch --cwd dir
       Internal: wait for the limit reset and send a notification.
   claude-relay help
@@ -29,6 +29,8 @@ Environment:
   RELAY_FREEBUFF_HOME=...    Freebuff config dir (default: ~/.config/manicode)
   RELAY_AUTO_IMPORT=0        disable automatic import of standalone Freebuff sessions
   RELAY_FIRST_LOOKBACK_HOURS first-run lookback window (default: 24)
+  RELAY_FREEBUFF_CONTEXT=0   disable the live context file and AGENTS.md pointer
+  RELAY_HOME_OVERRIDE=...    treat this directory as the home dir (testing; skip rule)
 `;
 
 function parseArgs(argv) {
@@ -70,7 +72,8 @@ async function main() {
       }
       console.log(`Handoff written: ${res.handoffPath}`);
       console.log(`Reset: ${res.resetAt || 'unknown'}`);
-      console.log('Paste this prompt into Freebuff: ' + core.PROMPT_TEXT);
+      console.log('Freebuff reads .claude-relay context automatically via AGENTS.md.');
+      console.log('If it does not pick it up, paste this prompt into Freebuff: ' + core.PROMPT_TEXT);
       return;
     }
     case 'sync': {
@@ -102,8 +105,9 @@ async function main() {
       return;
     }
     case 'status': {
-      const state = core.readState(cwd);
-      console.log(JSON.stringify({ cwd, relayDir: core.relayDir(cwd), state }, null, 2));
+      process.stdout.write(core.statusReport(cwd));
+      console.log('');
+      console.log(JSON.stringify({ state: core.readState(cwd) }, null, 2));
       return;
     }
     case 'watch': {
