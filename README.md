@@ -46,6 +46,7 @@ npm i -g github:TomatoBr0/claude-freebuff-relay
 | --- | --- |
 | `/handoff` | Hand the current task to Freebuff now, without waiting for a limit. |
 | `/sync` | Pull Freebuff's recent work into this Claude session and switch back to Claude mode. |
+| `/import` | Pull in what you did in recent Freebuff sessions for this project (newest chat by default). |
 | `/status` | Show the relay state for this project. |
 
 CLI equivalents: `claude-relay handoff [--cwd d] [--transcript path] [--no-launch]`, `claude-relay sync [--cwd d]`, `claude-relay status [--cwd d]`, `claude-relay help`.
@@ -57,11 +58,23 @@ CLI equivalents: `claude-relay handoff [--cwd d] [--transcript path] [--no-launc
 | `RELAY_NO_LAUNCH=1` | Do not open a terminal, touch the clipboard, notify, or start the reset watcher. Files are still written. |
 | `RELAY_AGENT_CMD` | Command to run in the new terminal (default `freebuff`). |
 | `RELAY_FREEBUFF_HOME` | Freebuff config directory that contains `projects/` (default `~/.config/manicode`). |
+| `RELAY_AUTO_IMPORT=0` | Disable automatic import of standalone Freebuff sessions. |
+| `RELAY_FIRST_LOOKBACK_HOURS` | First-run lookback for automatic import, in hours (default `24`). |
 
 ## How shared context works
 
 - **Claude to Freebuff:** the relay writes `.claude-relay/HANDOFF.md` containing the original task, files Claude edited, the latest todo list, git status and diff stat, and the last ~30 conversation turns. Freebuff is pointed at it via the clipboard prompt.
 - **Freebuff to Claude:** Freebuff keeps its chats as local JSON files. On the next prompt or session start, the relay reads chats newer than the handoff, keeps user messages, visible replies and tool-call lines (not reasoning and not tool output), and injects that as context. No summarization step is needed.
+
+## Picking up plain Freebuff sessions
+
+You don't have to hit a limit to use this. Any Freebuff session you ran in a project directory is picked up automatically the next time you talk to Claude there, so you never need to ask Freebuff for notes.
+
+- **Matching:** Freebuff stores each chat with the project root it ran in (`run-state.json`). Only chats whose root matches the current directory are used, so two projects with the same folder name stay separate. Chats without that metadata are kept.
+- **Automatic:** on session start and on each prompt, the relay looks for matching chats modified since the last sync. The first time in a project it only looks back 24 hours (`RELAY_FIRST_LOOKBACK_HOURS`). Each Freebuff chat is imported incrementally: a chat that is still open and gets new messages later contributes only the new ones.
+- **Cheap when idle:** when nothing changed, the check is a few `stat()` calls per prompt.
+- **On demand:** `/import` (or `claude-relay import`) pulls in the newest chat in full. Options: `--last N`, `--since 24h|3d|<ISO>`, `--list` (read-only listing with message counts and the first prompt).
+- **Off switch:** `RELAY_AUTO_IMPORT=0` disables automatic import. The limit handoff flow still works.
 
 ## Limitations
 

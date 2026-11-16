@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 'use strict';
-// claude-relay CLI: handoff | sync | status | watch | help
+// claude-relay CLI: handoff | sync | import | status | watch | help
 
-const fs = require('fs');
 const path = require('path');
 const core = require('../lib/core');
 
@@ -15,6 +14,9 @@ Usage:
   claude-relay sync [--cwd dir]
       Print Freebuff's activity since the handoff, write FREEBUFF_LOG.md and
       switch back to Claude mode.
+  claude-relay import [--cwd dir] [--last N] [--since <ISO|24h|3d>] [--list]
+      Pull in Freebuff sessions for this project, full history. Default: the
+      newest chat. --list only lists matching chats and changes nothing.
   claude-relay status [--cwd dir]
       Print the relay state for the project.
   claude-relay watch --cwd dir
@@ -22,9 +24,11 @@ Usage:
   claude-relay help
 
 Environment:
-  RELAY_NO_LAUNCH=1       do not open a terminal, touch clipboard, or notify
-  RELAY_AGENT_CMD=...     agent command to run (default: freebuff)
-  RELAY_FREEBUFF_HOME=... Freebuff config dir (default: ~/.config/manicode)
+  RELAY_NO_LAUNCH=1          do not open a terminal, touch clipboard, or notify
+  RELAY_AGENT_CMD=...        agent command to run (default: freebuff)
+  RELAY_FREEBUFF_HOME=...    Freebuff config dir (default: ~/.config/manicode)
+  RELAY_AUTO_IMPORT=0        disable automatic import of standalone Freebuff sessions
+  RELAY_FIRST_LOOKBACK_HOURS first-run lookback window (default: 24)
 `;
 
 function parseArgs(argv) {
@@ -34,6 +38,9 @@ function parseArgs(argv) {
     if (a === '--cwd') opts.cwd = argv[++i];
     else if (a === '--transcript') opts.transcript = argv[++i];
     else if (a === '--no-launch') opts.noLaunch = true;
+    else if (a === '--last') opts.last = parseInt(argv[++i], 10);
+    else if (a === '--since') opts.since = argv[++i];
+    else if (a === '--list') opts.list = true;
     else if (a === '-h' || a === '--help') opts.help = true;
     else opts._.push(a);
   }
@@ -67,11 +74,31 @@ async function main() {
       return;
     }
     case 'sync': {
-      const state = core.readState(cwd) || core.writeState(cwd, {});
       const { log, chatCount } = core.manualSync(cwd);
       process.stdout.write(log);
       if (!chatCount) process.stderr.write('(no Freebuff chats newer than the handoff)\n');
-      void state;
+      return;
+    }
+    case 'import': {
+      const sinceMs = opts.since != null ? core.parseSinceArg(opts.since) : null;
+      if (opts.list) {
+        // Read-only: no state or directory writes.
+        let rows = core.listChats(cwd, sinceMs);
+        if (opts.last > 0) rows = rows.slice(0, opts.last);
+        if (!rows.length) {
+          console.log('No Freebuff chats found for this project.');
+          return;
+        }
+        for (const r of rows) {
+          const when = new Date(r.mtime).toLocaleString();
+          const count = r.messageCount == null ? '?' : r.messageCount;
+          console.log(`${r.name}  ${when}  ${count} msgs  ${r.firstPrompt}`);
+        }
+        return;
+      }
+      const res = core.importChats(cwd, { last: opts.last > 0 ? opts.last : undefined, since: sinceMs });
+      process.stdout.write(res.log);
+      if (!res.count) process.stderr.write('(no matching Freebuff chats)\n');
       return;
     }
     case 'status': {
@@ -88,7 +115,6 @@ async function main() {
       process.stdout.write(USAGE);
       if (cmd !== 'help') process.exitCode = 1;
   }
-  void fs;
 }
 
 main().catch((err) => {

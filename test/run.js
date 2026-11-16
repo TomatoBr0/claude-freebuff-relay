@@ -46,6 +46,11 @@ const projDir = path.join(tmpRoot, 'my proj');
 const fbHome = path.join(tmpRoot, 'manicode');
 fs.mkdirSync(projDir, { recursive: true });
 fs.mkdirSync(fbHome, { recursive: true });
+const BIN = path.join(ROOT, 'bin', 'claude-relay.js');
+// In-process tests read these at call time; keep the developer's shell settings from leaking in.
+process.env.RELAY_FREEBUFF_HOME = fbHome;
+delete process.env.RELAY_AUTO_IMPORT;
+delete process.env.RELAY_FIRST_LOOKBACK_HOURS;
 
 console.log('parseResetTime');
 
@@ -285,6 +290,125 @@ test('CLI help prints usage', () => {
   const r = spawnSync(process.execPath, [path.join(ROOT, 'bin', 'claude-relay.js'), 'help'], { encoding: 'utf8' });
   assert.strictEqual(r.status, 0, r.stderr);
   assert.ok(r.stdout.includes('claude-relay'));
+});
+
+console.log('project matching');
+
+test('projectRoot decides membership: same basename under another root is excluded', () => {
+  const rootA = path.join(tmpRoot, 'rootA', 'shared');
+  const rootB = path.join(tmpRoot, 'rootB', 'shared');
+  const chatsDir = path.join(fbHome, 'projects', 'shared', 'chats');
+  const mk = (name, runState) => {
+    const d = path.join(chatsDir, name);
+    fs.mkdirSync(d, { recursive: true });
+    fs.writeFileSync(path.join(d, 'chat-messages.json'), JSON.stringify([]));
+    if (runState !== undefined) fs.writeFileSync(path.join(d, 'run-state.json'), runState);
+  };
+  mk('2099-02-01T00-00-00.000Z', JSON.stringify({ sessionState: { fileContext: { projectRoot: rootA, cwd: rootA } } }));
+  mk('2099-02-02T00-00-00.000Z', JSON.stringify({ sessionState: { fileContext: { cwd: rootA } } }));
+  mk('2099-02-03T00-00-00.000Z', undefined);
+  mk('2099-02-04T00-00-00.000Z', 'not json {{{');
+  const names = (cwd) => core.findProjectChats(cwd).map((c) => c.name).sort();
+  assert.deepStrictEqual(names(rootA), [
+    '2099-02-01T00-00-00.000Z',
+    '2099-02-02T00-00-00.000Z',
+    '2099-02-03T00-00-00.000Z',
+    '2099-02-04T00-00-00.000Z',
+  ]);
+  assert.deepStrictEqual(names(rootB), ['2099-02-03T00-00-00.000Z', '2099-02-04T00-00-00.000Z']);
+});
+
+console.log('auto-import (mode claude)');
+
+const autoProj = path.join(tmpRoot, 'auto proj');
+fs.mkdirSync(autoProj, { recursive: true });
+const autoChat = path.join(fbHome, 'projects', 'auto proj', 'chats', '2099-03-01T00-00-00.000Z');
+fs.mkdirSync(autoChat, { recursive: true });
+const autoFile = path.join(autoChat, 'chat-messages.json');
+const t0 = Date.now();
+let autoMsgs = [
+  { id: `user-${t0 - 60000}`, variant: 'user', content: 'AUTO FIRST USER MSG', timestamp: '03:00 PM' },
+  { id: `ai-${t0 - 59000}-abc123`, variant: 'ai', content: '', blocks: [{ type: 'text', content: 'AUTO FIRST AI REPLY' }], timestamp: '03:00 PM' },
+];
+fs.writeFileSync(autoFile, JSON.stringify(autoMsgs));
+
+test('first prompt in a claude-mode project imports recent Freebuff chat', () => {
+  const r = runHook('prompt', { cwd: autoProj }, { RELAY_FREEBUFF_HOME: fbHome });
+  assert.strictEqual(r.status, 0, r.stderr);
+  const out = JSON.parse(r.stdout);
+  assert.strictEqual(out.hookSpecificOutput.hookEventName, 'UserPromptSubmit');
+  const ctx = out.hookSpecificOutput.additionalContext;
+  assert.ok(ctx.includes('Since your last session here'), 'intro text');
+  assert.ok(ctx.includes('AUTO FIRST USER MSG'));
+  assert.ok(ctx.includes('AUTO FIRST AI REPLY'));
+  const state = JSON.parse(fs.readFileSync(path.join(autoProj, '.claude-relay', 'state.json'), 'utf8'));
+  assert.strictEqual(state.mode, 'claude');
+  assert.ok(state.lastSyncedAt);
+  assert.ok(state.importedChats['2099-03-01T00-00-00.000Z'] >= t0 - 59000);
+});
+
+test('second prompt with nothing new produces empty stdout', () => {
+  const r = runHook('prompt', { cwd: autoProj }, { RELAY_FREEBUFF_HOME: fbHome });
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(r.stdout, '');
+});
+
+test('appending a newer message re-imports only that message', () => {
+  const t1 = Date.now();
+  autoMsgs = autoMsgs.concat([{ id: `user-${t1}`, variant: 'user', content: 'AUTO NEW MSG', timestamp: '03:05 PM' }]);
+  fs.writeFileSync(autoFile, JSON.stringify(autoMsgs));
+  const r = runHook('session-start', { cwd: autoProj, hook_event_name: 'SessionStart' }, { RELAY_FREEBUFF_HOME: fbHome });
+  assert.strictEqual(r.status, 0, r.stderr);
+  const out = JSON.parse(r.stdout);
+  assert.strictEqual(out.hookSpecificOutput.hookEventName, 'SessionStart');
+  const ctx = out.hookSpecificOutput.additionalContext;
+  assert.ok(ctx.includes('AUTO NEW MSG'), 'new message');
+  assert.ok(!ctx.includes('AUTO FIRST USER MSG'), 'old message not repeated');
+  assert.ok(!ctx.includes('AUTO FIRST AI REPLY'), 'old reply not repeated');
+});
+
+test('RELAY_AUTO_IMPORT=0 disables auto-import in claude mode', () => {
+  const offProj = path.join(tmpRoot, 'off proj');
+  fs.mkdirSync(offProj, { recursive: true });
+  const offChat = path.join(fbHome, 'projects', 'off proj', 'chats', '2099-03-02T00-00-00.000Z');
+  fs.mkdirSync(offChat, { recursive: true });
+  fs.writeFileSync(path.join(offChat, 'chat-messages.json'), JSON.stringify([{ id: `user-${Date.now()}`, variant: 'user', content: 'OFF MSG' }]));
+  const r = runHook('prompt', { cwd: offProj }, { RELAY_FREEBUFF_HOME: fbHome, RELAY_AUTO_IMPORT: '0' });
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(r.stdout, '');
+  assert.ok(!fs.existsSync(path.join(offProj, '.claude-relay')), 'no state written');
+});
+
+console.log('import CLI');
+
+test('import --list is read-only and shows count and first prompt', () => {
+  const listProj = path.join(tmpRoot, 'list proj');
+  fs.mkdirSync(listProj, { recursive: true });
+  const listChat = path.join(fbHome, 'projects', 'list proj', 'chats', '2099-04-01T00-00-00.000Z');
+  fs.mkdirSync(listChat, { recursive: true });
+  fs.writeFileSync(
+    path.join(listChat, 'chat-messages.json'),
+    JSON.stringify([{ id: `user-${Date.now()}`, variant: 'user', content: 'LIST MSG BODY' }])
+  );
+  fs.writeFileSync(path.join(listChat, 'chat-meta.json'), JSON.stringify({ messageCount: 2, firstPrompt: 'LIST FIRST PROMPT' }));
+  const env = Object.assign({}, process.env, { RELAY_FREEBUFF_HOME: fbHome });
+  const r = spawnSync(process.execPath, [BIN, 'import', '--list', '--cwd', listProj], { encoding: 'utf8', env });
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.ok(r.stdout.includes('2099-04-01T00-00-00.000Z'), r.stdout);
+  assert.ok(r.stdout.includes('2 msgs'), r.stdout);
+  assert.ok(r.stdout.includes('LIST FIRST PROMPT'), r.stdout);
+  assert.ok(!fs.existsSync(path.join(listProj, '.claude-relay')), '--list must not write state');
+});
+
+test('import with no flags prints the newest chat in full and records it', () => {
+  const listProj = path.join(tmpRoot, 'list proj');
+  const env = Object.assign({}, process.env, { RELAY_FREEBUFF_HOME: fbHome });
+  const r = spawnSync(process.execPath, [BIN, 'import', '--cwd', listProj], { encoding: 'utf8', env });
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.ok(r.stdout.includes('LIST MSG BODY'), r.stdout);
+  const state = JSON.parse(fs.readFileSync(path.join(listProj, '.claude-relay', 'state.json'), 'utf8'));
+  assert.ok(state.importedChats['2099-04-01T00-00-00.000Z']);
+  assert.ok(state.lastSyncedAt);
 });
 
 // Cleanup

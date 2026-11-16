@@ -1,1 +1,1 @@
-{"name":"freebuff-relay","version":"0.1.0","description":"Hand off to Freebuff when you hit your Claude limit, and pull Freebuff's work back in when the limit resets.","author":{"name":"TomatoBr0"},"repository":"https://github.com/TomatoBr0/claude-freebuff-relay","license":"MIT"}
+{"name":"freebuff-relay","version":"0.2.0","description":"Hand off to Freebuff when you hit your Claude limit, and pull Freebuff's work back in when the limit resets.","author":{"name":"TomatoBr0"},"repository":"https://github.com/TomatoBr0/claude-freebuff-relay","license":"MIT"}
