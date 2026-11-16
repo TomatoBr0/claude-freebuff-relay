@@ -1,0 +1,1 @@
+{"name":"freebuff-relay","owner":{"name":"TomatoBr0"},"plugins":[{"name":"freebuff-relay","source":"./","description":"Hand off to Freebuff when you hit your Claude limit, and pull Freebuff's work back in when the limit resets."}]}

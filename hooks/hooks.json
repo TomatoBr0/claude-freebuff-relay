@@ -1,0 +1,6 @@
+{"hooks":{
+ "StopFailure":[{"matcher":"rate_limit","hooks":[{"type":"command","command":"node \"${CLAUDE_PLUGIN_ROOT}/scripts/hook.js\" limit","timeout":30}]}],
+ "Stop":[{"hooks":[{"type":"command","command":"node \"${CLAUDE_PLUGIN_ROOT}/scripts/hook.js\" stop","timeout":20}]}],
+ "SessionStart":[{"matcher":"startup|resume|clear|compact","hooks":[{"type":"command","command":"node \"${CLAUDE_PLUGIN_ROOT}/scripts/hook.js\" session-start","timeout":20}]}],
+ "UserPromptSubmit":[{"hooks":[{"type":"command","command":"node \"${CLAUDE_PLUGIN_ROOT}/scripts/hook.js\" prompt","timeout":20}]}]
+}}

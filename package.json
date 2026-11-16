@@ -1,0 +1,22 @@
+{
+  "name": "claude-freebuff-relay",
+  "version": "0.1.0",
+  "description": "Claude Code plugin + CLI: hand off to Freebuff when you hit your Claude limit, and sync Freebuff's work back when it resets.",
+  "bin": {
+    "claude-relay": "bin/claude-relay.js"
+  },
+  "main": "lib/core.js",
+  "files": ["bin", "lib", "scripts", "hooks", "commands", ".claude-plugin"],
+  "scripts": {
+    "test": "node test/run.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "author": "Caleb",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TomatoBr0/claude-freebuff-relay.git"
+  }
+}
