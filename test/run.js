@@ -576,6 +576,230 @@ test('3MB transcript: original task (head) and recent turn (tail) both present, 
   console.log(`       (3MB transcript: ${size} bytes, context refresh ${ms} ms)`);
 });
 
+// ---------- fb bridge ----------
+
+const proto = require(path.join(ROOT, 'lib', 'fb-protocol.js'));
+const fbChat = require(path.join(ROOT, 'lib', 'fb-chat.js'));
+const FB = path.join(ROOT, 'bin', 'fb.js');
+const FAKE = path.join(__dirname, 'fake-freebuff.js');
+
+console.log('fb protocol and chat events');
+
+test('line splitter joins frames split across chunks and multi-byte characters', () => {
+  const got = [];
+  const feed = proto.lineSplitter((l) => got.push(l));
+  const buf = Buffer.from('{"a":"é€"}\n{"b":2}\n', 'utf8');
+  feed(buf.subarray(0, 9));
+  feed(buf.subarray(9, 13));
+  feed(buf.subarray(13));
+  assert.deepStrictEqual(got, ['{"a":"é€"}', '{"b":2}']);
+});
+
+test('bad frames become error objects instead of throwing', () => {
+  assert.strictEqual(proto.parseFrame('{nope').type, 'error');
+  assert.deepStrictEqual(proto.parseFrame('{"op":"status"}'), { op: 'status' });
+});
+
+test('decodeEscapes turns \\r \\n \\e \\xHH into control characters', () => {
+  assert.strictEqual(proto.decodeEscapes('a\\rb\\n\\e\\x41\\\\'), 'a\rb\n\x1bA\\');
+});
+
+test('endpoint is stable per folder and differs between folders', () => {
+  const a = proto.endpointFor(path.join(tmpRoot, 'one'));
+  assert.strictEqual(a, proto.endpointFor(path.join(tmpRoot, 'one')));
+  assert.notStrictEqual(a, proto.endpointFor(path.join(tmpRoot, 'two')));
+  if (process.platform === 'win32') assert.ok(a.startsWith('\\\\.\\pipe\\fb-relay-'));
+});
+
+test('Git Bash $PWD (/c/...) is mapped to a Windows path on win32 only', () => {
+  if (process.platform === 'win32') assert.strictEqual(proto.toNativePath('/c/Users/x y'), 'C:\\Users\\x y');
+  else assert.strictEqual(proto.toNativePath('/c/Users/x y'), '/c/Users/x y');
+});
+
+const logFixtureDir = path.join(tmpRoot, 'chat-fixture');
+fs.mkdirSync(logFixtureDir, { recursive: true });
+const SINCE = Date.parse('2026-11-17T12:00:00.000Z');
+const msgs = [
+  { id: 'divider-1', variant: 'ai', content: '', blocks: [{ type: 'mode-divider', mode: 'LITE' }] },
+  { id: 'user-' + (SINCE - 60000), variant: 'user', content: 'old question' },
+  { id: 'ai-old', variant: 'ai', content: '', blocks: [{ type: 'text', content: 'OLD ANSWER' }] },
+  { id: 'user-' + (SINCE + 5), variant: 'user', content: 'new question' },
+  {
+    id: 'ai-new',
+    variant: 'ai',
+    content: '',
+    blocks: [
+      { type: 'text', content: 'THINKING TEXT', textType: 'reasoning' },
+      { type: 'tool', toolName: 'read_files', input: { path: 'hello.txt' }, output: 'TOOL OUTPUT SECRET' },
+      { type: 'text', content: '  visible answer  ', textType: 'text' },
+    ],
+  },
+];
+
+console.log('fb chat events');
+
+test('findUserIndex picks the user message sent at or after the ask time', () => {
+  assert.strictEqual(fbChat.findUserIndex(msgs, 'new question', SINCE), 3);
+  assert.strictEqual(fbChat.findUserIndex(msgs, 'new question', SINCE + 10000), -1, 'nothing sent after that');
+  // Text is only used when a message has no timestamp (TUI may rewrite text, ids are reliable).
+  const noIds = [{ id: 'x', variant: 'user', content: 'plain' }];
+  assert.strictEqual(fbChat.findUserIndex(noIds, 'plain', SINCE), 0);
+  assert.strictEqual(fbChat.findUserIndex(noIds, 'other', SINCE), -1);
+});
+
+test('collectEvents: reasoning and tool output never appear; tools stream, text waits for completion', () => {
+  const emitted = new Set();
+  const early = fbChat.collectEvents(msgs, 3, emitted, false);
+  assert.deepStrictEqual(early, [{ type: 'tool', name: 'read_files', arg: 'hello.txt' }]);
+  assert.strictEqual(fbChat.toolArg({ paths: ['a.js', 'b.js'] }), 'a.js, b.js');
+  const done = fbChat.collectEvents(msgs, 3, emitted, true);
+  assert.deepStrictEqual(done, [{ type: 'text', text: 'visible answer' }]);
+  const json = JSON.stringify([early, done]);
+  assert.ok(!json.includes('THINKING') && !json.includes('TOOL OUTPUT'), json);
+  assert.deepStrictEqual(fbChat.collectEvents(msgs, 3, emitted, true), [], 'no repeats');
+});
+
+test('collectEvents: a finished earlier message is complete even when not final', () => {
+  const m2 = [
+    { id: 'user-1', variant: 'user', content: 'q' },
+    { id: 'ai-1', variant: 'ai', content: '', blocks: [{ type: 'text', content: 'first part' }] },
+    { id: 'ai-2', variant: 'ai', content: '', blocks: [{ type: 'text', content: 'second part' }] },
+  ];
+  const got = fbChat.collectEvents(m2, 0, new Set(), false);
+  assert.deepStrictEqual(got, [{ type: 'text', text: 'first part' }]);
+});
+
+test('logSignals: finished and session-over markers are read only after the ask time', () => {
+  const iso = (ms) => new Date(ms).toISOString();
+  fs.writeFileSync(
+    path.join(logFixtureDir, 'log.jsonl'),
+    [
+      { timestamp: iso(SINCE - 5000), msg: 'Main prompt finished' },
+      { timestamp: iso(SINCE + 100), msg: '[chat-runtime] Freebuff session over; holding queued messages until rejoin' },
+      { timestamp: iso(SINCE + 2000), msg: '[message-queue] Processing next message from queue' },
+      { timestamp: iso(SINCE + 4000), msg: 'Main prompt finished' },
+    ]
+      .map((o) => JSON.stringify(o))
+      .join('\n') + '\n'
+  );
+  const sig = fbChat.logSignals(logFixtureDir, SINCE);
+  assert.strictEqual(sig.finished, true);
+  assert.strictEqual(sig.sessionOver, true);
+  assert.strictEqual(sig.processing, true);
+  const none = fbChat.logSignals(logFixtureDir, SINCE + 10000);
+  assert.strictEqual(none.finished, false);
+});
+
+console.log('fb MCP server');
+
+test('MCP: initialize echoes the protocol version, tools/list names both tools, unknown method is an error', () => {
+  const input = [
+    { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {} } },
+    { jsonrpc: '2.0', method: 'notifications/initialized' },
+    { jsonrpc: '2.0', id: 2, method: 'tools/list' },
+    { jsonrpc: '2.0', id: 3, method: 'nope' },
+    { jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'freebuff_ask', arguments: {} } },
+  ].map((o) => JSON.stringify(o)).join('\n') + '\n';
+  const r = spawnSync(process.execPath, [path.join(ROOT, 'lib', 'fb-mcp.js')], { input, encoding: 'utf8', timeout: 30000 });
+  const frames = r.stdout.trim().split('\n').map((l) => JSON.parse(l));
+  const byId = (id) => frames.find((f) => f.id === id);
+  assert.strictEqual(byId(1).result.protocolVersion, '2025-06-18');
+  assert.deepStrictEqual(byId(1).result.capabilities, { tools: {} });
+  const names = byId(2).result.tools.map((t) => t.name);
+  assert.deepStrictEqual(names, ['freebuff_ask', 'freebuff_screen']);
+  assert.strictEqual(byId(3).error.code, -32601);
+  assert.strictEqual(byId(4).result.isError, true, 'missing message is a tool error, not a crash');
+  assert.strictEqual(frames.length, 4, 'notifications get no reply');
+});
+
+// End-to-end needs the terminal modules. Skip (not fail) when they are not installed.
+let ptyReady = true;
+try {
+  require(path.join(ROOT, 'lib', 'fb-pty.js')).loadDeps();
+} catch (e) {
+  ptyReady = false;
+}
+
+console.log('fb end to end (fake Freebuff in a PTY)');
+
+if (!ptyReady) {
+  console.log(`  skip  end-to-end tests: terminal modules missing. Run: npm install --prefix "${ROOT}"`);
+} else {
+  const fbEnv = Object.assign({}, process.env, {
+    RELAY_FREEBUFF_HOME: fbHome,
+    FB_AGENT_CMD: process.execPath,
+    FB_AGENT_ARGS: JSON.stringify([FAKE]),
+  });
+  const fbRun = (args, extraEnv, input) =>
+    spawnSync(process.execPath, [FB].concat(args), {
+      encoding: 'utf8',
+      timeout: 120000,
+      input,
+      env: Object.assign({}, fbEnv, extraEnv || {}),
+    });
+  const projA = path.join(tmpRoot, 'fb proj a');
+  const projB = path.join(tmpRoot, 'fb proj b');
+  fs.mkdirSync(projA, { recursive: true });
+  fs.mkdirSync(projB, { recursive: true });
+  fs.writeFileSync(path.join(projA, 'hello.txt'), 'hello\n');
+
+  test('fb "message" streams the visible reply; reasoning and tool output stay hidden', () => {
+    const r = fbRun(['--cwd', projA, 'hello from the test']);
+    assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+    assert.ok(r.stdout.includes('FAKE REPLY: hello from the test'), r.stdout);
+    assert.ok(r.stdout.includes('→ read_files'), 'tool line shown');
+    assert.ok(!/SECRET|THINKING|TOOL OUTPUT/.test(r.stdout + r.stderr), r.stdout);
+    assert.ok(!/\x1b\[/.test(r.stdout), 'plain text output');
+  });
+
+  test('a second fb message goes to the same Freebuff session (one chat dir)', () => {
+    const r = fbRun(['--cwd', projA, 'second message']);
+    assert.strictEqual(r.status, 0, r.stdout + r.stderr);
+    assert.ok(r.stdout.includes('FAKE REPLY: second message'), r.stdout);
+    const chats = fs.readdirSync(path.join(fbHome, 'projects', path.basename(projA), 'chats'));
+    assert.strictEqual(chats.length, 1, chats.join(','));
+  });
+
+  test('fb status and fb screen work for a running session', () => {
+    const st = fbRun(['--cwd', projA, 'status']);
+    assert.ok(st.stdout.includes('running for'), st.stdout + st.stderr);
+    const sc = fbRun(['--cwd', projA, 'screen', '--lines', '10']);
+    assert.ok(sc.stdout.includes('Enter a coding task'), sc.stdout);
+  });
+
+  test('a message Freebuff never picks up is reported as stuck with the screen (exit 1)', () => {
+    const r = fbRun(['--cwd', projB, 'nobody answers this'], { FB_STUCK_SEC: '3', FAKE_FB_NEVER_PROCESS: '1' });
+    assert.strictEqual(r.status, 1, r.stdout + r.stderr);
+    assert.ok(r.stdout.includes('never started'), r.stdout);
+    assert.ok(r.stdout.includes('nobody answers this'), 'screen shown');
+    fbRun(['--cwd', projB, 'stop']);
+  });
+
+  test('MCP freebuff_ask returns the reply as tool text', () => {
+    const input = [
+      { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05' } },
+      { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'freebuff_ask', arguments: { message: 'via mcp', cwd: projA } } },
+    ].map((o) => JSON.stringify(o)).join('\n') + '\n';
+    const r = spawnSync(process.execPath, [path.join(ROOT, 'lib', 'fb-mcp.js')], {
+      input,
+      encoding: 'utf8',
+      timeout: 120000,
+      env: fbEnv,
+    });
+    const res = r.stdout.trim().split('\n').map((l) => JSON.parse(l)).find((f) => f.id === 2);
+    assert.strictEqual(res.result.isError, false, JSON.stringify(res));
+    assert.ok(res.result.content[0].text.includes('FAKE REPLY: via mcp'), res.result.content[0].text);
+  });
+
+  test('fb stop ends the session and status then reports none', () => {
+    const stop = fbRun(['--cwd', projA, 'stop']);
+    assert.ok(stop.stdout.includes('stopped'), stop.stdout + stop.stderr);
+    const st = fbRun(['--cwd', projA, 'status']);
+    assert.ok(st.stdout.includes('no Freebuff session'), st.stdout);
+    assert.ok(!fs.existsSync(path.join(projA, '.claude-relay', 'fb-daemon.json')), 'pid file removed');
+  });
+}
+
 // Cleanup
 try {
   fs.rmSync(tmpRoot, { recursive: true, force: true });

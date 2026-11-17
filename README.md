@@ -91,6 +91,51 @@ Freebuff automatically loads one instructions file from the project root into it
 - **No `AGENTS.md` pointer in your home directory** (too broad — it would apply to every Freebuff/Codex run there). The live context file and auto-import still work in home. Turn it all off with `RELAY_FREEBUFF_CONTEXT=0`.
 - `/fb-status` shows whether the pointer is installed, which file holds it, and when `CLAUDE_CONTEXT.md` was last updated.
 
+## Talk to Freebuff from Claude Code
+
+Send a message to a Freebuff session that runs in the background for this project, and read the reply. Freebuff does the work, so Claude's tokens are not spent.
+
+```
+! fb fix the failing test          # bash mode: no model involved, works when you hit the Claude limit
+/fb fix the failing test           # same, but Claude then shows the reply (needs Claude to be running)
+fb screen                          # what Freebuff's screen shows right now
+fb keys "\r"                       # press keys in Freebuff (\r Enter, \x1b Esc, \x15 Ctrl-U)
+fb status | fb stop | fb new       # session for this folder: check, end, start fresh
+```
+
+- **Claude can delegate too.** The plugin registers an MCP server with two tools: `freebuff_ask` (send a task, get the full reply) and `freebuff_screen`. Ask Claude to hand a cheap, self-contained job to Freebuff.
+- **One session per folder.** The first `fb` starts Freebuff in a PTY (about 5 seconds); later messages reuse it. The session exits after 30 minutes without use (`FB_IDLE_MIN`). If you end the session inside Freebuff (its "End session" key), the next `fb` starts a new one.
+- **Output.** Plain text. Freebuff's text replies and tool-call lines (`→ read_files hello.txt`). Reasoning and tool output are never printed. Replies print when Freebuff finishes each message; tool lines print as they run.
+- **Stuck sessions.** If Freebuff shows a login, rejoin or queue screen, `fb` stops waiting and prints the last screen lines with the next steps. Use `fb screen`, then `fb keys "\r"` or `fb new`.
+- **`/fb` shell caveat.** `/fb` puts your arguments into the shell, so quotes and `$` are interpreted. For messages with special characters use `! fb ...`, or pipe the text in: `printf '%s' "..." | fb -`.
+- **Multi-line messages** work with stdin (`fb -`) and `fb keys` with bracketed paste. Message text is typed as a paste, then Enter is sent.
+
+Setup (GitHub and marketplace installs do not run `npm install`):
+
+```
+cd "<plugin dir>"
+npm install          # @xterm/headless, plus @lydell/node-pty for Windows and other platforms with prebuilds
+npm link             # optional: puts `fb` on your PATH (or run: node "<plugin dir>/bin/fb.js")
+```
+
+If the terminal modules are missing, `fb` prints the exact `npm install --prefix "<plugin dir>"` command to run.
+
+| Variable | Purpose |
+| --- | --- |
+| `FB_IDLE_MIN` | Minutes without use before the session exits (default `30`). |
+| `FB_ASK_TIMEOUT_SEC` | How long one message may take before `fb` gives up and shows the screen (default `900`). |
+| `FB_STUCK_SEC` | Seconds Freebuff may take to pick up a message before it is reported stuck (default `45`). |
+| `FB_AGENT_CMD` / `FB_AGENT_ARGS` | Replace the Freebuff command (JSON array of args). Used by the tests. |
+
+How replies are read: the session writes its chats to disk. `fb` watches the chat that holds your message, and it is done when Freebuff's log says the prompt finished and the screen no longer shows "thinking...". The screen is only used for busy detection and diagnostics.
+
+Known limits (checked on Freebuff 0.2.36):
+
+- `fb --continue` and `fb --continue=<chat id>` start a **new** chat; they do not resume the old one. Resume is not working in this Freebuff version.
+- Freebuff's chat format and log messages are internal and may change. The completion markers are the most likely thing to break; the screen fallback covers some of that.
+- Tested on Windows 11 with the real Freebuff. macOS and Linux use the same PTY code through node-pty but were not run against Freebuff here.
+- Windows launches `freebuff.exe` directly. If it is missing, it runs the npm package entry with node. The `freebuff.cmd` shim through cmd.exe was tried and fails on paths with spaces, so it is the last resort.
+
 ## Limitations
 
 - Freebuff has no non-interactive mode. Automatic context works through `AGENTS.md`, so the paste is only a fallback.
@@ -105,7 +150,7 @@ Freebuff automatically loads one instructions file from the project root into it
 node test/run.js
 ```
 
-No npm dependencies. CommonJS only.
+The relay itself (hooks and `claude-relay`) has no npm dependencies. The `fb` bridge uses `@xterm/headless` and the optional `@lydell/node-pty`. CommonJS only.
 
 ## License
 
