@@ -71,7 +71,9 @@ SessionStart hook also restarts it if it is down.
   `anthropic-beta` included), so your claude.ai login and other models work as before.
 - Tool-less background requests (titles, summaries) made while on `freebuff` go to
   `claude-haiku-4-5` (`FB_GATEWAY_BG_MODEL`).
-- Freebuff will not run in the home folder (it stops at a project picker); the gateway says so.
+- Freebuff will not open the home folder as a project (it stops at a folder picker), so a Claude
+  Code session started in `~` runs Freebuff in a scratch workspace, `~/.claude/freebuff-home`
+  (`FB_GATEWAY_HOME_WORKSPACE`), and tells it the user's files are under the home folder.
 - `gateway status | start | stop | uninstall`. `uninstall` removes the env vars and launcher.
   If the gateway is down while installed, Claude Code cannot reach the API: run
   `node bin/claude-relay.js gateway start` or `gateway uninstall`.

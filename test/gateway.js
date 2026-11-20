@@ -66,6 +66,7 @@ async function main() {
     FB_GATEWAY_PORT: String(GW_PORT),
     FB_GATEWAY_UPSTREAM: `http://127.0.0.1:${upPort}`,
     FB_GATEWAY_QUIET: '1',
+    FB_GATEWAY_HOME_WORKSPACE: path.join(tmp, 'home-ws'),
     RELAY_FREEBUFF_HOME: path.join(tmp, 'manicode'),
     FB_AGENT_CMD: process.execPath,
     FB_AGENT_ARGS: JSON.stringify([FAKE]),
@@ -145,10 +146,15 @@ async function main() {
     assert.ok(!m.content[0].text.includes('[Context from Claude Code]'), 'later messages are sent bare');
   });
 
-  await test('freebuff in the home folder answers with a hint instead of hanging', async () => {
+  await test('freebuff in the home folder runs in the scratch workspace', async () => {
     const homeSys = [{ type: 'text', text: `Primary working directory: ${os.homedir()}` }];
-    const r = await post('/v1/messages', { model: 'freebuff', system: homeSys, tools, messages: [{ role: 'user', content: 'hi' }] });
-    assert.ok(/home folder/.test(JSON.parse(r.body).content[0].text), r.body);
+    const r = await post('/v1/messages', { model: 'freebuff', system: homeSys, tools, messages: [{ role: 'user', content: 'hi from home' }] });
+    const t = JSON.parse(r.body).content[0].text;
+    assert.ok(t.includes('hi from home') && t.includes('scratch workspace'), t);
+    assert.ok(fs.existsSync(path.join(tmp, 'home-ws', 'AGENTS.md')), 'workspace AGENTS.md written');
+    try {
+      await require('../lib/fb-client').stop(path.join(tmp, 'home-ws'));
+    } catch (e) {}
   });
 
   await test('command echoes are stripped; history skips the newest user turn', () => {
