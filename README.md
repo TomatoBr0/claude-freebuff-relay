@@ -54,15 +54,24 @@ npm i -g github:TomatoBr0/claude-freebuff-relay
 A small local gateway makes Freebuff selectable in Claude Code's model picker:
 
 ```
-node bin/claude-relay.js gateway install   # once; then restart Claude Code
-/model freebuff                            # in any project folder
-/model opus                                # back to Claude
+node bin/claude-relay.js gateway install   # once: starts the gateway, and at login (Windows)
+npm link                                   # once: puts claude-fb on PATH
+claude-fb                                  # Claude Code on Freebuff; /model opus and back work inside
 ```
 
-`install` adds `ANTHROPIC_BASE_URL=http://127.0.0.1:47823` and a "Freebuff" picker entry
-(`ANTHROPIC_CUSTOM_MODEL_OPTION`) to `~/.claude/settings.json` (backup: `settings.json.bak-fb-gateway`),
-starts the gateway hidden, and on Windows adds a login launcher to the Startup folder. The
-SessionStart hook also restarts it if it is down.
+`claude-fb` sets `ANTHROPIC_BASE_URL=http://127.0.0.1:47823` and a "Freebuff" `/model` entry
+(`ANTHROPIC_CUSTOM_MODEL_OPTION`) for that session only. Extra arguments go to `claude`.
+
+**Remote Control:** Claude Code (v2.1.196+) turns Remote Control off whenever
+`ANTHROPIC_BASE_URL` points anywhere but `api.anthropic.com`. So plain `claude` sessions
+stay on Anthropic and keep Remote Control; `claude-fb` sessions cannot be remote-controlled.
+From a Remote Control session (e.g. the mobile app) use `/fb <message>` or the `freebuff_ask`
+tool instead; those talk to Freebuff without changing the base URL.
+
+`gateway install --global` writes the env into `~/.claude/settings.json` instead
+(backup: `settings.json.bak-fb-gateway`), so `/model freebuff` works in every session, at the
+cost of Remote Control everywhere. Plain `gateway install` removes that global env again.
+The SessionStart hook restarts the gateway if a session uses it and it is down.
 
 - Requests for `model: freebuff` go to the same hidden Freebuff session `/fb` uses (one per
   project folder, taken from Claude Code's "Primary working directory"). Freebuff edits files
