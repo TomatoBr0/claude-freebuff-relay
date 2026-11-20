@@ -23,6 +23,11 @@ Usage:
       Print the relay state, Freebuff pointer status and context file age.
   claude-relay watch --cwd dir
       Internal: wait for the limit reset and send a notification.
+  claude-relay gateway <run|start|stop|status|install|uninstall>
+      Local API gateway so Freebuff is a Claude Code model: /model freebuff.
+      install adds ANTHROPIC_BASE_URL + a "Freebuff" /model entry to
+      ~/.claude/settings.json and starts the gateway at login (Windows).
+      uninstall reverts both. Port: FB_GATEWAY_PORT (default 47823).
   claude-relay help
 
 Environment:
@@ -117,6 +122,10 @@ async function main() {
     }
     case 'watch': {
       await core.watch(cwd);
+      return;
+    }
+    case 'gateway': {
+      await require('../lib/fb-gateway-admin').cli(opts._[1] || 'status');
       return;
     }
     case 'help':

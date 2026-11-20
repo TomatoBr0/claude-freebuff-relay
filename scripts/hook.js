@@ -16,6 +16,13 @@ function main() {
     } else if (event === 'stop') {
       core.handleStop(input);
     } else if (event === 'session-start' || event === 'prompt') {
+      if (event === 'session-start') {
+        try {
+          require('../lib/fb-gateway-admin').ensureForHook();
+        } catch (e) {
+          core.logError(cwd, `gateway ensure: ${e && e.message ? e.message : e}`);
+        }
+      }
       out = core.handleSessionOrPrompt(event, input);
     }
     if (out) process.stdout.write(JSON.stringify(out));

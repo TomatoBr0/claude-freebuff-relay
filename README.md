@@ -49,6 +49,33 @@ npm i -g github:TomatoBr0/claude-freebuff-relay
 | `/fb-import` | Pull in what you did in recent Freebuff sessions for this project (newest chat by default). |
 | `/fb-status` | Show the relay state for this project. |
 
+### Freebuff as a model: `/model freebuff`
+
+A small local gateway makes Freebuff selectable in Claude Code's model picker:
+
+```
+node bin/claude-relay.js gateway install   # once; then restart Claude Code
+/model freebuff                            # in any project folder
+/model opus                                # back to Claude
+```
+
+`install` adds `ANTHROPIC_BASE_URL=http://127.0.0.1:47823` and a "Freebuff" picker entry
+(`ANTHROPIC_CUSTOM_MODEL_OPTION`) to `~/.claude/settings.json` (backup: `settings.json.bak-fb-gateway`),
+starts the gateway hidden, and on Windows adds a login launcher to the Startup folder. The
+SessionStart hook also restarts it if it is down.
+
+- Requests for `model: freebuff` go to the same hidden Freebuff session `/fb` uses (one per
+  project folder, taken from Claude Code's "Primary working directory"). Freebuff edits files
+  itself; its reply streams back as the assistant message. Claude tools are not used.
+- Everything else is passed through to `api.anthropic.com` unchanged (Authorization and
+  `anthropic-beta` included), so your claude.ai login and other models work as before.
+- Tool-less background requests (titles, summaries) made while on `freebuff` go to
+  `claude-haiku-4-5` (`FB_GATEWAY_BG_MODEL`).
+- Freebuff will not run in the home folder (it stops at a project picker); the gateway says so.
+- `gateway status | start | stop | uninstall`. `uninstall` removes the env vars and launcher.
+  If the gateway is down while installed, Claude Code cannot reach the API: run
+  `node bin/claude-relay.js gateway start` or `gateway uninstall`.
+
 CLI equivalents: `claude-relay handoff [--cwd d] [--transcript path] [--open] [--no-launch]`, `claude-relay sync [--cwd d]`, `claude-relay status [--cwd d]`, `claude-relay help`.
 
 ## Environment variables
