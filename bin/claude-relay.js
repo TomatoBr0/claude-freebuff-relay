@@ -8,9 +8,11 @@ const core = require('../lib/core');
 const USAGE = `claude-relay - share context between Claude Code and Freebuff
 
 Usage:
-  claude-relay handoff [--cwd dir] [--transcript path] [--no-launch]
+  claude-relay handoff [--cwd dir] [--transcript path] [--open] [--no-launch]
       Write .claude-relay/HANDOFF.md from a Claude transcript (default: newest
       transcript for cwd under ~/.claude/projects) and switch to Freebuff mode.
+      Does not open a Freebuff window; use /fb or freebuff_ask in Claude Code.
+      --open opens Freebuff in a new terminal (old behaviour).
   claude-relay sync [--cwd dir]
       Print Freebuff's activity since the handoff, write FREEBUFF_LOG.md and
       switch back to Claude mode.
@@ -25,6 +27,7 @@ Usage:
 
 Environment:
   RELAY_NO_LAUNCH=1          do not open a terminal, touch clipboard, or notify
+  RELAY_OPEN_TERMINAL=1      on limit hit, open Freebuff in a new terminal (default: off)
   RELAY_AGENT_CMD=...        agent command to run (default: freebuff)
   RELAY_FREEBUFF_HOME=...    Freebuff config dir (default: ~/.config/manicode)
   RELAY_AUTO_IMPORT=0        disable automatic import of standalone Freebuff sessions
@@ -40,6 +43,7 @@ function parseArgs(argv) {
     if (a === '--cwd') opts.cwd = argv[++i];
     else if (a === '--transcript') opts.transcript = argv[++i];
     else if (a === '--no-launch') opts.noLaunch = true;
+    else if (a === '--open') opts.open = true;
     else if (a === '--last') opts.last = parseInt(argv[++i], 10);
     else if (a === '--since') opts.since = argv[++i];
     else if (a === '--list') opts.list = true;
@@ -64,7 +68,7 @@ async function main() {
       }
       const res = core.handleLimit(
         { cwd, transcript_path: transcript, error: 'manual_handoff' },
-        { noLaunch: !!opts.noLaunch, transcriptPath: transcript }
+        { noLaunch: !!opts.noLaunch, open: !!opts.open, transcriptPath: transcript }
       );
       if (res.skipped) {
         console.log('Handoff skipped: a handoff already happened in the last 2 minutes.');
@@ -73,7 +77,8 @@ async function main() {
       console.log(`Handoff written: ${res.handoffPath}`);
       console.log(`Reset: ${res.resetAt || 'unknown'}`);
       console.log('Freebuff reads .claude-relay context automatically via AGENTS.md.');
-      console.log('If it does not pick it up, paste this prompt into Freebuff: ' + core.PROMPT_TEXT);
+      if (opts.open) console.log('If it does not pick it up, paste this prompt into Freebuff: ' + core.PROMPT_TEXT);
+      else console.log('Continue from Claude Code with /fb <message> or the freebuff_ask tool (no window opened).');
       return;
     }
     case 'sync': {

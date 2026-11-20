@@ -2,7 +2,7 @@
 
 A Claude Code plugin (plus a tiny CLI) that keeps you working when you hit your Claude usage limit.
 
-- **Limit hit:** the relay writes a handoff file for the project, copies a prompt to your clipboard, and opens [Freebuff](https://www.npmjs.com/package/freebuff) in a new terminal in the same directory.
+- **Limit hit:** the relay writes a handoff file for the project, and keeps [Freebuff](https://www.npmjs.com/package/freebuff) inside Claude Code: use `/fb <message>` or the `freebuff_ask` MCP tool, which drive a hidden Freebuff session. No window opens unless `RELAY_OPEN_TERMINAL=1` (or `claude-relay handoff --open`).
 - **Limit resets:** when you talk to Claude again, Freebuff's chat activity and the current git state are injected into Claude's context automatically. Claude reviews the changes and continues.
 
 ```
@@ -49,12 +49,13 @@ npm i -g github:TomatoBr0/claude-freebuff-relay
 | `/fb-import` | Pull in what you did in recent Freebuff sessions for this project (newest chat by default). |
 | `/fb-status` | Show the relay state for this project. |
 
-CLI equivalents: `claude-relay handoff [--cwd d] [--transcript path] [--no-launch]`, `claude-relay sync [--cwd d]`, `claude-relay status [--cwd d]`, `claude-relay help`.
+CLI equivalents: `claude-relay handoff [--cwd d] [--transcript path] [--open] [--no-launch]`, `claude-relay sync [--cwd d]`, `claude-relay status [--cwd d]`, `claude-relay help`.
 
 ## Environment variables
 
 | Variable | Purpose |
 | --- | --- |
+| `RELAY_OPEN_TERMINAL=1` | On limit hit, also open Freebuff in a new terminal and copy the prompt to the clipboard. Off by default: Freebuff is used from Claude Code via `/fb` / `freebuff_ask`. |
 | `RELAY_NO_LAUNCH=1` | Do not open a terminal, touch the clipboard, notify, or start the reset watcher. Files are still written. |
 | `RELAY_AGENT_CMD` | Command to run in the new terminal (default `freebuff`). |
 | `RELAY_FREEBUFF_HOME` | Freebuff config directory that contains `projects/` (default `~/.config/manicode`). |

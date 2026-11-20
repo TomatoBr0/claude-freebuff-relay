@@ -1,6 +1,6 @@
 {
   "name": "claude-freebuff-relay",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Claude Code plugin + CLI: hand off to Freebuff when you hit your Claude limit, sync its work back, and talk to Freebuff from Claude Code (fb).",
   "bin": {
     "claude-relay": "bin/claude-relay.js",
