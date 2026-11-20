@@ -49,6 +49,20 @@ npm i -g github:TomatoBr0/claude-freebuff-relay
 | `/fb-import` | Pull in what you did in recent Freebuff sessions for this project (newest chat by default). |
 | `/fb-status` | Show the relay state for this project. |
 
+### Freebuff mode: `/fb-model on` (works with Remote Control)
+
+```
+/fb-model on       # this folder: Freebuff answers your messages, Claude is not called
+/fb-model off      # back to Claude
+/fb-model          # status
+```
+
+The plugin's UserPromptSubmit hook sends each prompt to the hidden Freebuff session for the
+folder and shows the reply (as the hook's "blocked" message) instead of calling Claude. Nothing
+changes about the API endpoint, so it works in Remote Control sessions (phone, claude.ai/code)
+and while Claude is rate-limited. The first message per Claude Code session carries a short
+context note. State: `~/.claude/fb-model.json`. Home folder uses the scratch workspace below.
+
 ### Freebuff as a model: `/model freebuff`
 
 A small local gateway makes Freebuff selectable in Claude Code's model picker:

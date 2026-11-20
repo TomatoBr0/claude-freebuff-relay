@@ -28,6 +28,8 @@ Usage:
       install adds ANTHROPIC_BASE_URL + a "Freebuff" /model entry to
       ~/.claude/settings.json and starts the gateway at login (Windows).
       uninstall reverts both. Port: FB_GATEWAY_PORT (default 47823).
+  claude-relay fb-model <on|off|status> [--cwd dir]
+      Freebuff mode: Freebuff answers prompts in this folder instead of Claude.
   claude-relay help
 
 Environment:
@@ -122,6 +124,14 @@ async function main() {
     }
     case 'watch': {
       await core.watch(cwd);
+      return;
+    }
+    case 'fb-model': {
+      const mode = require('../lib/fb-mode');
+      const sub = (opts._[1] || 'status').toLowerCase();
+      if (sub === 'on') mode.set(cwd, true);
+      else if (sub === 'off') mode.set(cwd, false);
+      console.log(mode.statusText(cwd));
       return;
     }
     case 'gateway': {

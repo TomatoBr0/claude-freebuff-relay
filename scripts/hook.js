@@ -5,7 +5,7 @@
 
 const core = require('../lib/core');
 
-function main() {
+async function main() {
   const event = process.argv[2] || '';
   const input = core.readStdinJson();
   const cwd = core.resolveCwd(input);
@@ -23,7 +23,14 @@ function main() {
           core.logError(cwd, `gateway ensure: ${e && e.message ? e.message : e}`);
         }
       }
-      out = core.handleSessionOrPrompt(event, input);
+      if (event === 'prompt') {
+        try {
+          out = await require('../lib/fb-mode').handlePrompt(input, cwd);
+        } catch (e) {
+          core.logError(cwd, `fb-model: ${e && e.stack ? e.stack : e}`);
+        }
+      }
+      if (!out) out = core.handleSessionOrPrompt(event, input);
     }
     if (out) process.stdout.write(JSON.stringify(out));
   } catch (err) {
@@ -32,8 +39,6 @@ function main() {
   process.exitCode = 0;
 }
 
-try {
-  main();
-} catch (err) {
+main().catch(() => {
   process.exitCode = 0;
-}
+});
