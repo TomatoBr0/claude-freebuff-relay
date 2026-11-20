@@ -132,7 +132,8 @@ async function main() {
       .filter((d) => d.type === 'content_block_delta')
       .map((d) => d.delta.text)
       .join('');
-    assert.ok(text.includes('FAKE REPLY: hello gateway'), text);
+    assert.ok(text.includes('hello gateway'), text);
+    assert.ok(text.includes('[Context from Claude Code]'), 'first message carries context');
     assert.ok(!/SECRET|THINKING|TOOL OUTPUT/.test(text), text);
   });
 
@@ -141,12 +142,36 @@ async function main() {
     const m = JSON.parse(r.body);
     assert.strictEqual(m.role, 'assistant');
     assert.ok(m.content[0].text.includes('FAKE REPLY: second'), m.content[0].text);
+    assert.ok(!m.content[0].text.includes('[Context from Claude Code]'), 'later messages are sent bare');
   });
 
   await test('freebuff in the home folder answers with a hint instead of hanging', async () => {
     const homeSys = [{ type: 'text', text: `Primary working directory: ${os.homedir()}` }];
     const r = await post('/v1/messages', { model: 'freebuff', system: homeSys, tools, messages: [{ role: 'user', content: 'hi' }] });
     assert.ok(/home folder/.test(JSON.parse(r.body).content[0].text), r.body);
+  });
+
+  await test('command echoes are stripped; history skips the newest user turn', () => {
+    const msgs = [
+      { role: 'user', content: 'first question' },
+      { role: 'assistant', content: 'first answer' },
+      { role: 'user', content: [{ type: 'text', text: '<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args></command-args>' }, { type: 'text', text: '<local-command-stdout>Set model</local-command-stdout>' }] },
+      { role: 'user', content: 'hello?' },
+    ];
+    assert.strictEqual(gw.latestUserText(msgs), 'hello?');
+    const h = gw.recentHistory(msgs);
+    assert.ok(h.includes('User: first question') && h.includes('Assistant: first answer'), h);
+    assert.ok(!/hello\?|\/model/.test(h), h);
+  });
+
+  await test('suggest_followups renders as a numbered list of next steps', () => {
+    const out = require('../lib/fb-chat').formatEvent({
+      type: 'tool', name: 'suggest_followups', arg: '',
+      followups: [{ label: 'Run checks', prompt: 'Run the tests' }, { label: 'Review', prompt: '' }],
+    });
+    assert.ok(out.includes('Suggested next steps:'), out);
+    assert.ok(out.includes('1. Run checks — Run the tests') && out.includes('2. Review'), out);
+    assert.ok(!out.includes('→'), out);
   });
 
   await test('working directory is found in the first user message too', () => {
